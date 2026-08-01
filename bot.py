@@ -120,19 +120,28 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Error: {e}")
 
 
+import asyncio
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN env var set karo.")
 
-    # HTTP server background thread me start karo (Render web service ke liye)
+    # HTTP server background thread me
     threading.Thread(target=run_web, daemon=True).start()
+
+    # Explicit event loop banao (Python 3.12+ safe)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
 
     logger.info("Bot chal raha hai...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, close_loop=False)
 
 
 if __name__ == "__main__":

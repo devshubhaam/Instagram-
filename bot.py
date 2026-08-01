@@ -1,7 +1,9 @@
 import os
 import re
 import logging
+import threading
 import instaloader
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -11,6 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.getenv("PORT", "10000"))
 
 L = instaloader.Instaloader(
     dirname_pattern="downloads/{target}",
@@ -21,6 +24,24 @@ L = instaloader.Instaloader(
 )
 
 
+# ---- Dummy HTTP server (Render Web Service ke liye port bind karna zaroori hai) ----
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+    def log_message(self, format, *args):
+        return  # silent
+
+
+def run_web():
+    server = HTTPServer(("0.0.0.0", PORT), PingHandler)
+    logger.info(f"HTTP server on port {PORT}")
+    server.serve_forever()
+
+
+# ---- Telegram handlers ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Namaste!\n\n"
@@ -39,7 +60,9 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Sahi username bhejo.")
         return
 
-    msg = await update.message.reply_text(f"⏳ `{username}` ke posts fetch ho rahe hain...", parse_mode="Markdown")
+    msg = await update.message.reply_text(
+        f"⏳ `{username}` ke posts fetch ho rahe hain...", parse_mode="Markdown"
+    )
 
     try:
         profile = instaloader.Profile.from_username(L.context, username)
@@ -48,7 +71,7 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     count = 0
-    max_posts = 5  # ek baar me kitne posts bhejne hain
+    max_posts = 5
 
     try:
         for post in profile.get_posts():
@@ -67,21 +90,20 @@ async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption = (post.caption or "")[:900]
             caption = f"📸 @{username}\n\n{caption}"
 
-            # jo bhi files download hui unhe bhej do
             for fname in sorted(os.listdir(target_dir)):
                 fpath = os.path.join(target_dir, fname)
                 try:
                     if fname.endswith(".mp4"):
                         with open(fpath, "rb") as f:
                             await update.message.reply_video(f, caption=caption)
-                        os.remove(fpath)
                         count += 1
+                        os.remove(fpath)
                         break
                     elif fname.endswith((".jpg", ".jpeg", ".png")):
                         with open(fpath, "rb") as f:
                             await update.message.reply_photo(f, caption=caption)
-                        os.remove(fpath)
                         count += 1
+                        os.remove(fpath)
                         break
                 except Exception as e:
                     logger.warning(f"Send fail: {e}")
@@ -102,6 +124,9 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN env var set karo.")
 
+    # HTTP server background thread me start karo (Render web service ke liye)
+    threading.Thread(target=run_web, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
@@ -112,4 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
